@@ -69,6 +69,25 @@ flowchart LR
 
 ---
 
+## Test results
+
+Executed against a live **IOS-XRv9000** instance running in Cisco Modeling Labs —
+all five tests pass:
+
+```text
+test_iosxr_health.py::test_netconf_connection_established PASSED
+test_iosxr_health.py::test_netconf_capabilities_advertised PASSED
+test_iosxr_health.py::test_running_config_contains_mgmt_interface PASSED
+test_iosxr_health.py::test_get_system_uptime_and_hostname PASSED
+test_iosxr_health.py::test_management_interface_is_operationally_up PASSED
+
+===================================== 5 passed =====================================
+```
+
+Each run also emits a self-contained `qa_report.html` (configured in `pytest.ini`).
+
+---
+
 ## GenAI utilization
 
 Leveraged **GitHub Copilot / ChatGPT** to rapidly generate the pytest fixtures,
