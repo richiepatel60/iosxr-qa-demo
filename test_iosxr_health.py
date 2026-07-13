@@ -202,3 +202,85 @@ def test_management_interface_is_operationally_up(netconf_session):
     state = mgmt.get("state", "")
     log.info("%s operational state = %s", MGMT_INTERFACE, state)
     assert "up" in state.lower(), f"{MGMT_INTERFACE} is not up (state={state})"
+
+
+# --------------------------------------------------------------------------- #
+# TEST 6 - OpenConfig support (vendor-neutral YANG models named in the JD)      #
+# --------------------------------------------------------------------------- #
+@pytest.mark.openconfig
+def test_openconfig_models_supported(netconf_session):
+    """Confirm the device supports OpenConfig - the vendor-neutral YANG models
+    the JD lists alongside NETCONF-YANG.
+
+    Two levels of proof: (1) the device advertises OpenConfig modules in its
+    capabilities, and (2) a live <get> against ``openconfig-interfaces`` returns
+    real data including the management interface.
+    """
+    caps = list(netconf_session.server_capabilities)
+    oc_models = [c for c in caps if "openconfig" in c.lower()]
+    log.info("Device advertised %d OpenConfig models", len(oc_models))
+    assert oc_models, "Device advertised no OpenConfig models"
+
+    oc_interfaces_filter = """
+        <interfaces xmlns="http://openconfig.net/yang/interfaces"/>
+    """
+    reply = netconf_session.get(filter=("subtree", oc_interfaces_filter))
+    assert reply.data_xml, "Empty response for openconfig-interfaces"
+    assert MGMT_INTERFACE in reply.data_xml, (
+        f"{MGMT_INTERFACE} was not returned via openconfig-interfaces"
+    )
+    log.info("Retrieved %s via openconfig-interfaces", MGMT_INTERFACE)
+
+
+# --------------------------------------------------------------------------- #
+# TEST 7 - Config automation: create / verify / delete a loopback (edit-config) #
+# --------------------------------------------------------------------------- #
+@pytest.mark.config
+def test_edit_config_loopback_round_trip(netconf_session):
+    """Closed-loop configuration automation, not just read-only validation:
+
+    1. <edit-config> creates a Loopback interface in the candidate datastore.
+    2. <commit> promotes it to running.
+    3. <get-config> confirms it landed in the running configuration.
+    4. Teardown deletes it again so the device is left exactly as found.
+    """
+    loopback = "Loopback100"
+    add_cfg = """
+        <config>
+          <interface-configurations xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-ifmgr-cfg">
+            <interface-configuration>
+              <active>act</active>
+              <interface-name>Loopback100</interface-name>
+              <description>QA-NETCONF-AUTOMATION</description>
+            </interface-configuration>
+          </interface-configurations>
+        </config>
+    """
+    del_cfg = """
+        <config xmlns:xc="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <interface-configurations xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-ifmgr-cfg">
+            <interface-configuration xc:operation="delete">
+              <active>act</active>
+              <interface-name>Loopback100</interface-name>
+            </interface-configuration>
+          </interface-configurations>
+        </config>
+    """
+    try:
+        netconf_session.edit_config(target="candidate", config=add_cfg)
+        netconf_session.commit()
+        log.info("Committed creation of %s", loopback)
+
+        reply = netconf_session.get_config(source="running")
+        assert loopback in reply.data_xml, (
+            f"{loopback} was not found in the running config after commit"
+        )
+        log.info("Verified %s is present in the running configuration", loopback)
+    finally:
+        # Always attempt to remove the test interface so the box is left clean.
+        try:
+            netconf_session.edit_config(target="candidate", config=del_cfg)
+            netconf_session.commit()
+            log.info("Cleaned up %s", loopback)
+        except Exception as exc:  # noqa: BLE001 - cleanup must never mask a failure
+            log.warning("Cleanup of %s failed: %s", loopback, exc)

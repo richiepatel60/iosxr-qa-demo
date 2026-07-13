@@ -66,6 +66,8 @@ flowchart LR
 | 3 | `test_running_config_contains_mgmt_interface` | config | `<running>` datastore contains `MgmtEth0/RP0/CPU0/0` |
 | 4 | `test_get_system_uptime_and_hostname` | operational | Live `<get>` + subtree filter returns hostname & uptime (parsed with xmltodict) |
 | 5 | `test_management_interface_is_operationally_up` | operational | Management interface is operationally **up** (grey-box state check) |
+| 6 | `test_openconfig_models_supported` | openconfig | Device advertises OpenConfig models and returns `MgmtEth0/RP0/CPU0/0` via `openconfig-interfaces` |
+| 7 | `test_edit_config_loopback_round_trip` | config | Closed-loop config automation: create -> verify -> delete a loopback via `<edit-config>` + `<commit>` |
 
 ---
 
