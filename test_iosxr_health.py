@@ -91,6 +91,10 @@ def netconf_session():
             f"Is 'netconf-yang agent ssh' enabled and is the router reachable?"
         )
 
+    # If manager.connect() had failed, the except blocks above would have ended
+    # the test via pytest.fail(). This assert makes that guarantee explicit so the
+    # static type-checker knows `session` is a live Manager (never None) below.
+    assert session is not None
     log.info("NETCONF session %s established to %s", session.session_id, HOST)
     yield session
 

@@ -59,34 +59,31 @@ flowchart LR
 
 ## Test coverage
 
-| # | Test | Category | What it proves |
-| - | --- | --- | --- |
-| 1 | `test_netconf_connection_established` | connectivity | NETCONF session opens and a session-id is assigned |
-| 2 | `test_netconf_capabilities_advertised` | manageability | Device advertises NETCONF base + a healthy set of YANG models |
-| 3 | `test_running_config_contains_mgmt_interface` | config | `<running>` datastore contains `MgmtEth0/RP0/CPU0/0` |
-| 4 | `test_get_system_uptime_and_hostname` | operational | Live `<get>` + subtree filter returns hostname & uptime (parsed with xmltodict) |
-| 5 | `test_management_interface_is_operationally_up` | operational | Management interface is operationally **up** (grey-box state check) |
-| 6 | `test_openconfig_models_supported` | openconfig | Device advertises OpenConfig models and returns `MgmtEth0/RP0/CPU0/0` via `openconfig-interfaces` |
-| 7 | `test_edit_config_loopback_round_trip` | config | Closed-loop config automation: create -> verify -> delete a loopback via `<edit-config>` + `<commit>` |
+Tests are organised by concern under `tests/`, sharing one NETCONF session (and
+an optional RESTCONF client) from `conftest.py`:
+
+| Module | Markers | What it validates |
+| --- | --- | --- |
+| `tests/test_connectivity.py` | connectivity, manageability | NETCONF session establishes; device advertises a healthy YANG capability surface |
+| `tests/test_operational.py` | operational | Live uptime & hostname; management interface is up; interface inventory is reported |
+| `tests/test_configuration.py` | config | Running-config validation; required-config compliance (parametrized); `<edit-config>` loopback create/verify/delete round-trip; direct write to `<running>` rejected (negative); `discard-changes` rollback |
+| `tests/test_openconfig.py` | openconfig | OpenConfig models are advertised and `openconfig-interfaces` returns data |
+| `tests/test_restconf.py` | restconf | YANG library and interfaces over RESTCONF/HTTPS (auto-skipped if the RESTCONF agent is not enabled) |
 
 ---
 
 ## Test results
 
-Executed against a live **IOS-XRv9000** instance running in Cisco Modeling Labs —
-all five tests pass:
+Run the whole suite with `pytest`. Against a live **IOS-XRv9000** in Cisco
+Modeling Labs, the NETCONF, OpenConfig and configuration tests pass; the RESTCONF
+tests **skip automatically** if the image does not expose a RESTCONF agent, so
+the suite stays green rather than failing on unsupported platforms.
 
-```text
-test_iosxr_health.py::test_netconf_connection_established PASSED
-test_iosxr_health.py::test_netconf_capabilities_advertised PASSED
-test_iosxr_health.py::test_running_config_contains_mgmt_interface PASSED
-test_iosxr_health.py::test_get_system_uptime_and_hostname PASSED
-test_iosxr_health.py::test_management_interface_is_operationally_up PASSED
+Each run emits a self-contained **`qa_report.html`** (configured in `pytest.ini`)
+with per-test results and the captured live logs (hostname, uptime, interface
+state).
 
-===================================== 5 passed =====================================
-```
-
-Each run also emits a self-contained `qa_report.html` (configured in `pytest.ini`).
+---
 
 ---
 
@@ -105,8 +102,15 @@ to speed up test development, refactoring and documentation.
 
 ```
 iosxr-qa-demo/
-├── test_iosxr_health.py   # the NETCONF-YANG test suite
-├── pytest.ini             # pytest config: markers, HTML report, live logs
+├── config.py              # connection settings (env-var driven)
+├── conftest.py            # shared fixtures: NETCONF session + RESTCONF client
+├── tests/
+│   ├── test_connectivity.py    # NETCONF session + YANG capabilities
+│   ├── test_operational.py     # live operational-state (YANG oper models)
+│   ├── test_configuration.py   # config validation + edit-config automation
+│   ├── test_openconfig.py      # OpenConfig support
+│   └── test_restconf.py        # RESTCONF over HTTPS (skips if not enabled)
+├── pytest.ini             # markers, HTML report, live logs, test paths
 ├── requirements.txt       # pinned dependencies (reproducible env)
 ├── qa_report.html         # generated HTML test report (artifact)
 ├── .gitignore
@@ -154,32 +158,30 @@ Confirm the management IP is reachable from your workstation on TCP/830
 
 ## How to run
 
-```powershell
-# 1. Confirm the router's NETCONF port is reachable
-Test-NetConnection -ComputerName 192.168.255.40 -Port 830
-
-# 2. Create and activate the virtual environment
+```bash
+# 1. Create and activate a virtual environment
 python -m venv venv
-venv\Scripts\activate            # Windows
-# source venv/bin/activate       # macOS / Linux
+source venv/bin/activate          # Linux / macOS
+# venv\Scripts\activate           # Windows
 
-# 3. Install dependencies
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# 4. Provide connection details (defaults target the lab; override as needed)
-$env:XR_HOST="192.168.255.40"
-$env:XR_USERNAME="cisco"
-$env:XR_PASSWORD="<your-password>"
+# 3. Provide connection details (defaults target the lab; override as needed)
+export XR_HOST=192.168.255.124
+export XR_USERNAME=cisco
+export XR_PASSWORD='your-password'
 
-# 5. Run the suite and generate the HTML report
-pytest test_iosxr_health.py --html=qa_report.html --self-contained-html
+# 4. Run the whole suite (auto-generates qa_report.html)
+pytest
 ```
 
-Open `qa_report.html` in a browser to review the results.
-
 Connection settings are read from environment variables
-(`XR_HOST`, `XR_PORT`, `XR_USERNAME`, `XR_PASSWORD`, `XR_TIMEOUT`) so no real
-credentials are ever committed to source control.
+(`XR_HOST`, `XR_PORT`, `XR_RESTCONF_PORT`, `XR_USERNAME`, `XR_PASSWORD`,
+`XR_TIMEOUT`) so no real credentials are ever committed to source control. The
+RESTCONF tests skip automatically unless the router exposes a RESTCONF agent.
+
+Open `qa_report.html` in a browser to review the results.
 
 ---
 
@@ -188,6 +190,6 @@ credentials are ever committed to source control.
 - Establishing NETCONF sessions and reading YANG operational state with ncclient.
 - Mapping IOS-XR YANG models (`Cisco-IOS-XR-shellutil-oper`,
   `Cisco-IOS-XR-pfi-im-cmd-oper`) to concrete health assertions.
-- **Next:** add RESTCONF and gNMI/streaming-telemetry checks, and extend the
-  operational assertions toward optical-layer models (L0/L1) to align with the
-  NCS optical platforms.
+- **Next:** add gNMI / streaming-telemetry validation and lightweight AI/ML
+  anomaly detection on operational metrics, and extend the assertions toward
+  optical-layer YANG models (L0/L1) to align with the NCS optical platforms.
