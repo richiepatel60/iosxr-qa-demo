@@ -112,7 +112,7 @@ iosxr-qa-demo/
 │   └── test_restconf.py        # RESTCONF over HTTPS (skips if not enabled)
 ├── pytest.ini             # markers, HTML report, live logs, test paths
 ├── requirements.txt       # pinned dependencies (reproducible env)
-├── qa_report.html         # generated HTML test report (artifact)
+├── qa_report.html         # generated on each run (git-ignored)
 ├── .gitignore
 └── README.md
 ```

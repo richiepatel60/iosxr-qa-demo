@@ -12,6 +12,9 @@ __pycache__/
 .coverage
 assets/
 
+# Generated HTML test report (regenerated on every run)
+qa_report.html
+
 # Local environment overrides - NEVER commit real credentials
 .env
 

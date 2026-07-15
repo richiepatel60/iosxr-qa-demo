@@ -1,0 +1,488 @@
+===============================================================================
+ AI-DRIVEN IOS-XR MANAGEABILITY & HEALTH VALIDATION SUITE
+ PROJECT NOTES  -  what it does, how, and WHY every decision was made
+===============================================================================
+
+Note on scope of this document:
+  This is the full "engineering journal" for the project - the reasoning behind
+  the lab, the router, the network plumbing, the Ubuntu runner, the proxy, the
+  Python suite, and the delivery pipeline. Internal/confidential identifiers
+  (the specific CML server name, the corporate proxy hostname, corporate IP
+  ranges) are deliberately left out because this file lives in a public repo.
+  Only lab-internal RFC1918 addresses (192.168.255.0/24, CML's default NAT
+  subnet) are shown, because they are not sensitive.
+
+
+-------------------------------------------------------------------------------
+ 0. ONE-LINE SUMMARY
+-------------------------------------------------------------------------------
+A Python + pytest test suite that logs into a Cisco IOS-XRv9000 router over
+NETCONF/YANG (and RESTCONF), validates its manageability surface, configuration,
+and live operational health, and produces an HTML report - executed against a
+router running in Cisco Modeling Labs (CML).
+
+
+-------------------------------------------------------------------------------
+ 1. WHY THIS PROJECT EXISTS (the job it targets)
+-------------------------------------------------------------------------------
+The target role is a Cisco Software QA Engineer position focused on optical
+systems (DWDM/ROADM/OTN on the NCS optical platforms). The job description
+calls out, as MUST-haves:
+  - Python test automation
+  - Manageability: NETCONF-YANG, RESTCONF, OpenConfig, Telemetry
+  - Using GenAI / GitHub Copilot to accelerate test development
+  - AI/ML-based testing approaches (anomaly detection, etc.)
+  - "Grey-box" testing: on-the-box and off-the-box views of IOS-XR systems
+  - Test planning / methodology
+
+Key insight that makes this project relevant even though it uses a ROUTER, not
+an optical box:
+  IOS-XR is the SAME network operating system that runs on both the high-end
+  routers AND the NCS optical platforms (NCS1010/1004/1014). They are all managed
+  through the SAME manageability stack (NETCONF/YANG, RESTCONF, gNMI, telemetry).
+  So the automation approach proven here transfers directly to the optical gear -
+  you would simply point the same framework at the optical YANG models.
+
+This project is deliberately a "proof of work": small, real, and end-to-end,
+built in a short time to demonstrate curiosity and the ability to learn the
+exact skills the JD lists.
+
+
+-------------------------------------------------------------------------------
+ 2. KEY CONCEPTS (so every term in this project has meaning)
+-------------------------------------------------------------------------------
+IOS-XR
+  Cisco's carrier-grade network OS. Config is TWO-STAGE: you edit a "candidate"
+  copy, then "commit" it to the "running" config. This matters for the write
+  tests below.
+
+MANAGEABILITY
+  Configuring and monitoring a device PROGRAMMATICALLY (by software), instead of
+  a human typing CLI. The programmable interfaces are NETCONF, RESTCONF, gNMI and
+  streaming telemetry.
+
+NETCONF (RFC 6241)
+  A network management PROTOCOL. A client (our Python script) connects to the
+  device over SSH on TCP port 830 and exchanges XML messages called RPCs:
+    <get-config>  - read configuration from a datastore (e.g. "running")
+    <get>         - read operational (live) state
+    <edit-config> - write configuration (into "candidate")
+    <commit>      - promote candidate to running
+  On connect, both sides exchange a <hello> listing their "capabilities".
+
+YANG
+  The DATA MODELING language that defines the STRUCTURE of everything NETCONF
+  carries. NETCONF is the transport; YANG is the schema. Example models used
+  here: Cisco-IOS-XR-shellutil-oper (uptime/clock),
+  Cisco-IOS-XR-pfi-im-cmd-oper (interface state),
+  Cisco-IOS-XR-ifmgr-cfg (interface config), openconfig-interfaces.
+
+CAPABILITIES
+  In the <hello> exchange the device advertises the NETCONF base version PLUS
+  every YANG module it supports, each as a URI. A large list is a good proxy for
+  "this device is highly manageable via YANG".
+
+RESTCONF (RFC 8040)
+  The REST/HTTP flavour of the same idea: HTTPS + JSON (or XML) to read/write the
+  same YANG data. Not enabled on every IOS-XR image.
+
+OPENCONFIG
+  Vendor-NEUTRAL YANG models (openconfig-interfaces, etc.) so the same automation
+  can work across vendors. Explicitly named in the JD.
+
+GREY-BOX TESTING
+  Off-the-box = driving the device from an external system (our test runner).
+  On-the-box  = validating the device's INTERNAL live state.
+  Grey-box    = doing both at once: an external client asserting on internal
+                operational YANG state. That is exactly what tests 4/5 do.
+
+
+-------------------------------------------------------------------------------
+ 3. THE LAB (CML) - TOPOLOGY AND EVERY DECISION
+-------------------------------------------------------------------------------
+
+3.1  WHY CML (Cisco Modeling Labs)
+  CML is Cisco's network simulation platform. It can run real Cisco OS images
+  (including IOS-XRv9000) as virtual machines. It gives a safe, disposable
+  sandbox with a real IOS-XR control plane to automate against - no physical
+  hardware needed. Accessed through a web UI on a shared Cisco CML pod.
+
+3.2  THE ROUTER: IOS-XRv9000
+  Chosen because it runs the genuine IOS-XR OS with the full NETCONF/YANG stack,
+  the same manageability surface as the optical NCS platforms. One router is
+  enough because every test here is single-device and management-plane; no
+  data-plane links or second nodes are required.
+
+3.3  EXTERNAL CONNECTIVITY - the hardest part, and the reasoning
+  The lab node lives inside CML; getting a test client to REACH it was the main
+  challenge. CML offers an "External Connector" node with a few modes:
+
+  (a) NAT mode
+      - CML gives the node an address on its built-in NAT network,
+        192.168.255.0/24, with the CML server as gateway (192.168.255.1) and a
+        built-in DHCP server. This is why the router auto-got 192.168.255.x.
+      - Provides OUTBOUND internet (masqueraded through the CML server), but the
+        node is NOT reachable INBOUND from outside the CML server.
+      - Result: from a laptop, both ping and TCP/830 to the node FAILED - there
+        is simply no route into CML's private NAT from the corporate network.
+
+  (b) System Bridge mode
+      - Bridges the node directly onto the CML server's real (physical) network,
+        as if it were plugged into that LAN. Needs that network's DHCP, or a
+        static IP valid on it.
+      - On the corporate network this failed: no DHCP lease was granted
+        (enterprise network access control blocks unknown devices), so the
+        management interface stayed with NO IP ("Internet protocol processing
+        disabled"). Dead end for a locked-down corporate pod.
+
+  (c) PATty (Port Address Translation tool) - the "correct" answer for locked
+      environments, which we could not use
+      - CML has a tool that forwards a chosen TCP port on the CML controller's
+        OWN reachable IP to a node's port over the NAT network (e.g. controller
+        port 2830 -> node port 830). It is designed exactly for "the only IP I
+        can reach is the CML controller itself".
+      - Configured by attaching a simple TAG to the node, e.g.  pat:2830:830
+      - BUT the underlying service (virl2-patty) is DISABLED by default and can
+        only be enabled by a CML SYSADMIN via the Cockpit admin UI. We had only
+        normal web-UI access (no sysadmin), and the Cockpit page was additionally
+        blocked by the browser's HSTS policy on the cisco.com domain. So PATty
+        was not an option for us on this shared pod.
+
+  (d) THE SOLUTION WE USED: an in-lab test runner
+      - Instead of reaching the router from the laptop, we put the TEST RUNNER
+        INSIDE the lab: a small Linux node on the SAME NAT segment as the router.
+      - Being on 192.168.255.0/24 with the router, it reaches the router's
+        NETCONF port directly, and it reaches the internet (for pip/git) via the
+        corporate proxy. This is a normal, even preferred, QA pattern:
+        automation running ADJACENT to the device under test.
+
+3.4  WHY UBUNTU FOR THE RUNNER (not Alpine)
+  The suite needs ncclient, which pulls in cryptography, paramiko and lxml -
+  packages with compiled C/Rust extensions.
+    - Ubuntu is glibc-based, so "pip install" downloads PREBUILT binary wheels:
+      fast, no compiler needed.
+    - Alpine is musl-based, so those same packages would have to COMPILE FROM
+      SOURCE (needing gcc, and Rust for cryptography): slow and error-prone.
+  => Ubuntu was the right, low-risk choice. (Its default CML login is cisco/cisco
+     and it uses cloud-init for setup.)
+
+3.5  THE CORPORATE PROXY (why ping "failed" but everything still worked)
+  On the corporate network the lab node has DNS but NO direct internet egress -
+  all outbound web traffic must go through an HTTP proxy, and ICMP (ping) is
+  blocked entirely. So:
+    - "ping github.com" will ALWAYS fail here (ICMP blocked). It is not a real
+      internet test and is irrelevant.
+    - Tools that understand a proxy (pip, git, curl, apt) work once the proxy is
+      set (http_proxy / https_proxy environment variables). Tools that do not
+      (ping/traceroute) never will.
+  Rule of thumb learned: on this pod, if a tool can use a proxy it works; if it
+  can't, it won't - so never use ping as the connectivity test.
+
+3.6  UNMANAGED SWITCH / MULTIPLE NAT CONNECTORS
+  A single External Connector connects to one node. To put BOTH the router and
+  the Ubuntu runner on the same NAT segment without disturbing the router's
+  existing link, either:
+    - add a second External Connector (also NAT) for the Ubuntu node - all NAT
+      connectors share the same 192.168.255.0/24 bridge, so the two nodes still
+      see each other; OR
+    - place an Unmanaged Switch between the External Connector and both nodes.
+  We kept the router's link untouched and gave the Ubuntu node its own NAT
+  connector - zero risk to the working router.
+
+  Final topology:
+      [ IOS-XRv9000 ] --- [ External Connector: NAT ] \
+                                                        >-- 192.168.255.0/24
+      [ Ubuntu runner ] - [ External Connector: NAT ] /
+      Router: 192.168.255.124 (example)   Ubuntu: 192.168.255.145 (example)
+
+
+-------------------------------------------------------------------------------
+ 4. ROUTER CONFIGURATION (every line, and why)
+-------------------------------------------------------------------------------
+Exec mode (one time):
+  crypto key generate rsa
+      Creates the SSH host key pair. NETCONF runs over SSH, so with no host key
+      the SSH server - and therefore NETCONF - cannot start.
+
+Config mode:
+  ssh server v2                    Enable secure SSH version 2.
+  ssh server vrf default           SSH server listens in the default VRF (the
+                                   routing table where the mgmt interface lives).
+  ssh server netconf vrf default   Enable the NETCONF subsystem over SSH (TCP/830)
+                                   in the default VRF.
+  netconf-yang agent ssh           Start the agent process that answers NETCONF
+                                   RPCs using YANG models.
+  interface MgmtEth0/RP0/CPU0/0
+    ipv4 address dhcp              Get a management IP automatically (from CML's
+                                   NAT DHCP).
+    no shutdown                    Bring the interface up.
+  commit                           IOS-XR is commit-based; nothing takes effect
+                                   until you commit.
+
+Verify on the router:
+  show ssh                         SSH server / sessions.
+  show netconf-yang statistics     NETCONF agent up and counting RPCs.
+  show ipv4 interface MgmtEth0/RP0/CPU0/0 brief   Confirm the mgmt IP.
+
+In one sentence: these commands turn the router into something a program can log
+into and query/configure in a structured way.
+
+
+-------------------------------------------------------------------------------
+ 5. THE TEST SUITE - TOOLS, STRUCTURE, AND EVERY TEST
+-------------------------------------------------------------------------------
+
+5.1  TOOLS (and why each)
+  pytest       Test framework: discovers tests, runs fixtures, reports results.
+  pytest-html  Generates the self-contained qa_report.html artifact.
+  ncclient     NETCONF client library (SSH transport, RPCs, datastores).
+  xmltodict    Converts NETCONF XML replies into Python dicts so assertions read
+               cleanly (dict["a"]["b"]) instead of manual XML parsing.
+  requests     HTTP client for the RESTCONF tests (HTTPS + JSON).
+
+5.2  PROJECT STRUCTURE (and why modular)
+  config.py       Central connection settings, all overridable by environment
+                  variables (so no credentials or lab addresses are hard-coded).
+  conftest.py     Shared pytest fixtures (the NETCONF session and the RESTCONF
+                  client). pytest auto-loads conftest.py and injects fixtures
+                  into any test that names them.
+  tests/          Test modules split BY CONCERN (not one giant file):
+                    test_connectivity.py   - session + capabilities
+                    test_operational.py    - live oper-state checks
+                    test_configuration.py  - config read + write lifecycle
+                    test_openconfig.py     - OpenConfig support
+                    test_restconf.py       - RESTCONF basics
+  pytest.ini      Config: test paths, markers, HTML report, live-log output,
+                  and pythonpath=. so "import config" works from tests/.
+  requirements.txt  Pinned dependency versions for a reproducible environment.
+  Why modular: readability, clear ownership per category, easy to run a subset
+  by marker (e.g. only "config" tests), and it mirrors how real test suites are
+  organised. It is also a "test engineering methodology" signal for the JD.
+
+5.3  FIXTURES (conftest.py) and why session-scoped
+  netconf_session  Opens ONE NETCONF session for the whole run (scope="session")
+                   because the SSH+NETCONF handshake is relatively expensive; all
+                   tests reuse it. Uses yield: code before yield = setup, after =
+                   teardown (always closes the session, even on failure). Bad
+                   credentials or an unreachable port are turned into a clear
+                   failure message.
+  restconf         Builds a requests session (basic auth, JSON headers, TLS verify
+                   off for the lab's self-signed cert). It PROBES the RESTCONF
+                   endpoint first and, if unreachable, SKIPS the RESTCONF tests
+                   instead of failing them - so the suite stays green on images
+                   that don't expose RESTCONF.
+
+5.4  THE 16 TESTS (what / how / why)
+
+  tests/test_connectivity.py
+    1) test_netconf_connection_established
+       Asserts the session is connected and has a session-id (set during the
+       NETCONF <hello>). Proves basic manageability.
+    2) test_netconf_capabilities_advertised
+       Reads server_capabilities, checks a NETCONF base capability exists and that
+       many YANG models are advertised (>= 10). Proves a healthy manageability
+       surface.
+
+  tests/test_operational.py    (grey-box: external client, internal live state)
+    3) test_system_uptime_and_hostname
+       <get> with a subtree filter on Cisco-IOS-XR-shellutil-oper; parse with
+       xmltodict; assert hostname present and uptime > 0.
+    4) test_management_interface_is_operationally_up
+       <get> on Cisco-IOS-XR-pfi-im-cmd-oper interface-briefs; find the mgmt
+       interface; assert its state contains "up".
+    5) test_interface_inventory_reported
+       Same model; assert at least one interface is returned and each entry
+       carries a state leaf (a broader health/inventory check).
+
+  tests/test_configuration.py  (read compliance + full write lifecycle)
+       Helper _clean_candidate (autouse fixture): discards any staged candidate
+       config before/after EACH test so tests can't leak config into one another
+       (test isolation - a methodology point).
+    6) test_running_config_contains_mgmt_interface
+       <get-config source=running>; assert the mgmt interface is present.
+    7-9) test_required_config_present[...]  (PARAMETRIZED, 3 cases)
+       One test function run once per required stanza (mgmt interface,
+       "netconf-yang", "ssh server"); asserts each is in running config. This is
+       a compliance / config-drift check.
+    10) test_edit_config_loopback_round_trip
+       Closed-loop automation: <edit-config> creates Loopback100 in candidate,
+       <commit>, <get-config> confirms it in running, then a finally-block deletes
+       it and commits again - leaving the box exactly as found. Proves WRITE
+       automation, not just reads.
+    11) test_edit_running_datastore_is_rejected  (NEGATIVE test)
+       IOS-XR has no writable-running datastore, so a direct write to <running>
+       must raise an RPCError. Asserts the error path is handled correctly.
+    12) test_discard_changes_rollback  (ROLLBACK test)
+       Stage a loopback in candidate, confirm it's in candidate, discard-changes,
+       then confirm the candidate is clean - i.e. the change never reached running.
+
+  tests/test_openconfig.py     (vendor-neutral models named in the JD)
+    13) test_openconfig_models_advertised
+       Assert the device advertises openconfig-* models in its capabilities.
+    14) test_openconfig_interfaces_get
+       <get> on openconfig-interfaces; assert the mgmt interface is returned -
+       proves real data through a vendor-neutral model.
+
+  tests/test_restconf.py       (RESTCONF basics; auto-skips if agent disabled)
+    15) test_restconf_yang_library
+       HTTPS GET /restconf/data/ietf-yang-library:modules-state; assert HTTP 200
+       and a well-formed JSON body.
+    16) test_restconf_get_interfaces
+       HTTPS GET the interface list via RESTCONF; assert 200/204 and (if 200) the
+       mgmt interface appears.
+
+5.5  PYTEST TECHNIQUES USED (and why they matter)
+  Fixtures + dependency injection  Shared setup, requested by parameter name.
+  scope="session"                  Open the transport once, reuse everywhere.
+  Markers (@pytest.mark.<cat>)     Label tests by category; run subsets; nicer
+                                   reports. Registered in pytest.ini.
+  @pytest.mark.parametrize         One test body, many data cases (the compliance
+                                   check) - less duplicated code.
+  autouse fixture                  Automatic per-test setup/teardown (candidate
+                                   hygiene) without each test asking for it.
+  assert msg + pytest.raises       Readable failures; explicit negative testing.
+
+
+-------------------------------------------------------------------------------
+ 6. SECURITY DECISIONS
+-------------------------------------------------------------------------------
+  - NO credentials in the code. Everything sensitive (host, user, password) is
+    read from environment variables via os.getenv, with harmless lab defaults.
+  - The router password is set as a shell env var at RUN TIME on the runner; it
+    is never written to a file, never committed, never pushed. Entering it with
+    "read -s" keeps it off the screen and out of shell history.
+  - .gitignore excludes the venv, caches, and any local .env file.
+  - The HTML report and tracebacks do not print the password.
+  - For a public repo: internal infrastructure identifiers (CML server name,
+    proxy hostname, corporate IPs) are kept OUT of the committed files.
+
+
+-------------------------------------------------------------------------------
+ 7. SOURCE CONTROL & DELIVERY
+-------------------------------------------------------------------------------
+  PUBLIC GITHUB REPO
+    The project is published as a public GitHub repo so a hiring manager can see
+    the code, README, and report.
+
+  PER-FOLDER WORK/PERSONAL ISOLATION (why an SSH alias)
+    The laptop's global Git is tied to a work account that cannot host public
+    repos. Git AUTH is global per host, but the REMOTE URL and commit identity
+    are per-folder. So this ONE folder uses:
+      - a dedicated personal SSH key,
+      - an SSH host alias (e.g. "github-personal") in ~/.ssh/config pointing at
+        github.com with that key,
+      - a LOCAL git user.name/user.email,
+      - a remote of the form  git@github-personal:<user>/<repo>.git
+    This pushes to the personal account WITHOUT touching global/work auth. Other
+    folders keep using the work account untouched.
+
+  CLONE-ON-THE-NODE WORKFLOW (why)
+    The laptop can't reach the router; the Ubuntu node can. So the node CLONES
+    the public repo (auth-free for a public repo, via the proxy) and runs pytest
+    there. Code lives in git (one source of truth); the runner just checks it out.
+    To view the HTML report, the node can push it back and the laptop pulls it,
+    or a screenshot of the passing run is used as evidence.
+
+
+-------------------------------------------------------------------------------
+ 8. HOW THIS MAPS TO A REAL CI/CD PIPELINE
+-------------------------------------------------------------------------------
+  What we did by hand is exactly what a pipeline does automatically:
+    Manual here                     Real environment
+    -----------                     ----------------
+    git clone on the Ubuntu node    CI (Jenkins/GitLab/GitHub Actions) checks out
+                                    the repo onto a lab runner automatically
+    the Ubuntu node is the runner   a permanent runner already has lab reachability
+    export XR_PASSWORD=...          secrets injected from a vault / CI secret store
+    read qa_report.html             results published to a dashboard / artifact store
+    run pytest by hand              triggered on commit / PR / nightly schedule
+  Interview line: "The suite is CI-ready - a pipeline checks the repo out onto a
+  lab runner, injects credentials as env vars, runs pytest, and publishes the
+  HTML report. In the lab I ran that flow by hand against an IOS-XRv9000."
+
+
+-------------------------------------------------------------------------------
+ 9. HOW TO RUN
+-------------------------------------------------------------------------------
+  On any host that can reach the router (in our case the in-lab Ubuntu node):
+    export https_proxy=http://<corporate-proxy>:<port>    # only if behind a proxy
+    export http_proxy=$https_proxy
+    git clone <repo-url> && cd iosxr-qa-demo
+    python3 -m venv venv && source venv/bin/activate
+    pip install -r requirements.txt
+    export XR_HOST=192.168.255.124 XR_PORT=830 XR_USERNAME=cisco
+    read -s -p "Router password: " XR_PASSWORD; export XR_PASSWORD; echo
+    pytest
+  Result: NETCONF/OpenConfig/config tests pass; RESTCONF tests skip if the agent
+  is not enabled; qa_report.html is generated.
+
+
+-------------------------------------------------------------------------------
+ 10. TROUBLESHOOTING LOG (what broke -> how it was solved)
+-------------------------------------------------------------------------------
+  - Laptop could not reach node on NAT           -> node is behind CML NAT; not
+                                                    reachable from outside.
+  - System Bridge gave the router no IP          -> corporate DHCP/NAC blocked it.
+  - PATty would have fixed it                    -> service needs CML sysadmin;
+                                                    Cockpit blocked by HSTS. N/A.
+  - Chosen fix: in-lab Ubuntu runner             -> reaches router directly + proxy
+                                                    internet.
+  - pip could not reach PyPI                     -> no direct egress; found the
+                                                    corporate HTTP proxy works.
+  - ping github.com failed                       -> ICMP blocked; irrelevant; use
+                                                    the proxy for git/pip/curl.
+  - Alpine would be painful for ncclient         -> used Ubuntu (glibc wheels).
+  - Git remote malformed (alias + https mixed)   -> remote is git@alias:user/repo.git
+  - Pylance "attribute of None" warnings         -> added assert session is not None.
+
+
+-------------------------------------------------------------------------------
+ 11. WHAT I LEARNED
+-------------------------------------------------------------------------------
+  - Enabling and using NETCONF-YANG on IOS-XR end to end.
+  - Reading operational YANG state and mapping models to concrete assertions.
+  - The candidate/commit config model and closed-loop config automation.
+  - CML external connectivity internals (NAT, System Bridge, PATty) and how
+    enterprise network policy (NAC, proxy, HSTS) shapes what is possible.
+  - Structuring a real pytest project (fixtures, markers, parametrize, isolation).
+  - Per-folder Git identity isolation on a shared work laptop.
+
+
+-------------------------------------------------------------------------------
+ 12. NEXT STEPS / EXTENSIONS
+-------------------------------------------------------------------------------
+  - gNMI + streaming (model-driven) telemetry validation with a small collector.
+  - AI/ML-based testing: anomaly detection on operational counters
+    (e.g. z-score / IsolationForest) and simple failure prediction.
+  - GenAI test generation from the device's advertised YANG models; LLM-assisted
+    log root-cause analysis.
+  - Point the same framework at optical YANG models (openconfig-terminal-device,
+    optical-channel) on a real NCS platform.
+
+
+-------------------------------------------------------------------------------
+ 13. INTERVIEW TALKING POINTS + LIKELY Q&A
+-------------------------------------------------------------------------------
+  Pitch: "I built a Python/pytest suite that validates an IOS-XR router's health
+  and manageability over NETCONF/YANG and RESTCONF - session and capability
+  checks, config validation and closed-loop edit-config automation, and live
+  operational-state assertions - with an HTML report, run against an IOS-XRv9000
+  in CML. I used Copilot to accelerate it."
+
+  Q: NETCONF vs YANG?            A: NETCONF is the protocol (XML/RPC over SSH:830);
+                                    YANG is the data model defining the structure.
+  Q: get vs get-config?         A: get-config reads configuration from a datastore;
+                                    get reads live operational state.
+  Q: How did you write config?  A: edit-config into the candidate datastore, then
+                                    commit; verified in running; rolled back with
+                                    discard-changes.
+  Q: How is this relevant to    A: NCS optical platforms run IOS-XR and use the
+     optical?                       same NETCONF/YANG stack, so the same automation
+                                    applies to optical YANG models.
+  Q: How would this run in CI?  A: A pipeline checks out the repo onto a lab
+                                    runner, injects creds as env vars, runs pytest,
+                                    publishes the report.
+
+===============================================================================
+ END OF PROJECT NOTES
+===============================================================================
