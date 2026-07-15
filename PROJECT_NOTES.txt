@@ -25,15 +25,7 @@ router running in Cisco Modeling Labs (CML).
 -------------------------------------------------------------------------------
  1. WHY THIS PROJECT EXISTS (the job it targets)
 -------------------------------------------------------------------------------
-The target role is a Cisco Software QA Engineer position focused on optical
-systems (DWDM/ROADM/OTN on the NCS optical platforms). The job description
-calls out, as MUST-haves:
-  - Python test automation
-  - Manageability: NETCONF-YANG, RESTCONF, OpenConfig, Telemetry
-  - Using GenAI / GitHub Copilot to accelerate test development
-  - AI/ML-based testing approaches (anomaly detection, etc.)
-  - "Grey-box" testing: on-the-box and off-the-box views of IOS-XR systems
-  - Test planning / methodology
+
 
 Key insight that makes this project relevant even though it uses a ROUTER, not
 an optical box:
