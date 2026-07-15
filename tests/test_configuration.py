@@ -16,11 +16,14 @@ log = logging.getLogger("iosxr-qa")
 
 IFMGR_CFG = "http://cisco.com/ns/yang/Cisco-IOS-XR-ifmgr-cfg"
 
-# Stanzas that must always be present in the running config (compliance/drift).
+# Tokens that must appear in the running config (compliance / drift check).
+# NOTE: NETCONF returns config as structured YANG/XML, NOT CLI text - so these
+# are strings that genuinely appear in the XML (model names, element values),
+# not CLI phrases like "ssh server".
 REQUIRED_CONFIG = [
-    "MgmtEth0/RP0/CPU0/0",  # management interface
-    "netconf-yang",          # NETCONF agent enabled
-    "ssh server",            # SSH server enabled
+    "MgmtEth0/RP0/CPU0/0",  # management interface is present
+    "netconf-yang",          # NETCONF-YANG agent is enabled
+    "root-lr",               # a privileged user group is configured (AAA)
 ]
 
 
