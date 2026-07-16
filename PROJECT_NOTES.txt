@@ -17,9 +17,9 @@ Note on scope of this document:
  0. ONE-LINE SUMMARY
 -------------------------------------------------------------------------------
 A Python + pytest test suite that logs into a Cisco IOS-XRv9000 router over
-NETCONF/YANG (and RESTCONF), validates its manageability surface, configuration,
-and live operational health, and produces an HTML report - executed against a
-router running in Cisco Modeling Labs (CML).
+NETCONF/YANG and gNMI (with RESTCONF demonstrated), validates its manageability
+surface, configuration, and live operational health, and produces an HTML report
+- executed against a router running in Cisco Modeling Labs (CML).
 
 
 -------------------------------------------------------------------------------
@@ -231,12 +231,13 @@ into and query/configure in a structured way.
   xmltodict    Converts NETCONF XML replies into Python dicts so assertions read
                cleanly (dict["a"]["b"]) instead of manual XML parsing.
   requests     HTTP client for the RESTCONF tests (HTTPS + JSON).
+  pygnmi       gNMI client (over gRPC) for the model-driven / telemetry tests.
 
 5.2  PROJECT STRUCTURE (and why modular)
   config.py       Central connection settings, all overridable by environment
                   variables (so no credentials or lab addresses are hard-coded).
-  conftest.py     Shared pytest fixtures (the NETCONF session and the RESTCONF
-                  client). pytest auto-loads conftest.py and injects fixtures
+  conftest.py     Shared pytest fixtures (NETCONF session, RESTCONF client, and
+                  gNMI target). pytest auto-loads conftest.py and injects fixtures
                   into any test that names them.
   tests/          Test modules split BY CONCERN (not one giant file):
                     test_connectivity.py   - session + capabilities
@@ -244,6 +245,7 @@ into and query/configure in a structured way.
                     test_configuration.py  - config read + write lifecycle
                     test_openconfig.py     - OpenConfig support
                     test_restconf.py       - RESTCONF basics
+                    test_gnmi.py           - gNMI (gRPC) model-driven interface
   pytest.ini      Config: test paths, markers, HTML report, live-log output,
                   and pythonpath=. so "import config" works from tests/.
   requirements.txt  Pinned dependency versions for a reproducible environment.
@@ -263,8 +265,12 @@ into and query/configure in a structured way.
                    endpoint first and, if unreachable, SKIPS the RESTCONF tests
                    instead of failing them - so the suite stays green on images
                    that don't expose RESTCONF.
+  gnmi_target      Returns gNMI connection kwargs. Probes TCP/57400 first and
+                   SKIPS the gNMI tests if gRPC is off. Uses TLS with certificate
+                   verification skipped (self-signed cert) and sets no_grpc_proxy
+                   so gRPC connects DIRECTLY to the router, not via the proxy.
 
-5.4  THE 16 TESTS (what / how / why)
+5.4  THE 18 TESTS (what / how / why)
 
   tests/test_connectivity.py
     1) test_netconf_connection_established
@@ -293,9 +299,12 @@ into and query/configure in a structured way.
     6) test_running_config_contains_mgmt_interface
        <get-config source=running>; assert the mgmt interface is present.
     7-9) test_required_config_present[...]  (PARAMETRIZED, 3 cases)
-       One test function run once per required stanza (mgmt interface,
-       "netconf-yang", "ssh server"); asserts each is in running config. This is
-       a compliance / config-drift check.
+       One test function run once per required token that must appear in the
+       running config: the mgmt interface, "netconf-yang", and "root-lr". A
+       compliance / config-drift check. NOTE: these are tokens that genuinely
+       appear in the NETCONF YANG/XML, NOT CLI phrases - an earlier version
+       checked for "ssh server" (which never appears in the XML) and correctly
+       failed, a reminder that programmatic validation must be model-aware.
     10) test_edit_config_loopback_round_trip
        Closed-loop automation: <edit-config> creates Loopback100 in candidate,
        <commit>, <get-config> confirms it in running, then a finally-block deletes
@@ -322,6 +331,16 @@ into and query/configure in a structured way.
     16) test_restconf_get_interfaces
        HTTPS GET the interface list via RESTCONF; assert 200/204 and (if 200) the
        mgmt interface appears.
+
+  tests/test_gnmi.py           (gNMI over gRPC - IOS-XR's native interface)
+    17) test_gnmi_capabilities
+       gNMI Capabilities RPC; assert a gNMI version is returned and the device
+       advertises supported YANG models. Proves the gRPC/gNMI channel + TLS
+       handshake work end to end.
+    18) test_gnmi_get_interfaces
+       gNMI Get on openconfig-interfaces (json_ietf encoding); assert the mgmt
+       interface appears in the response. Proves model-driven reads over gNMI -
+       the same transport used for streaming telemetry.
 
 5.5  PYTEST TECHNIQUES USED (and why they matter)
   Fixtures + dependency injection  Shared setup, requested by parameter name.
@@ -443,7 +462,8 @@ into and query/configure in a structured way.
 -------------------------------------------------------------------------------
  12. NEXT STEPS / EXTENSIONS
 -------------------------------------------------------------------------------
-  - gNMI + streaming (model-driven) telemetry validation with a small collector.
+  - Streaming / dial-out telemetry validation with a small collector (gNMI Get
+    and Capabilities are already covered by the suite).
   - AI/ML-based testing: anomaly detection on operational counters
     (e.g. z-score / IsolationForest) and simple failure prediction.
   - GenAI test generation from the device's advertised YANG models; LLM-assisted
