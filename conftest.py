@@ -120,5 +120,5 @@ def gnmi_target():
         "target": (host, port),
         "username": config.USERNAME,
         "password": config.PASSWORD,
-        "insecure": True,  # lab box: gRPC configured with 'no-tls'
+        "skip_verify": True,  # lab box: gRPC over TLS with a self-signed cert
     }
