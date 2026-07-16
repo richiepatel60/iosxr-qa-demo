@@ -75,10 +75,11 @@ an optional RESTCONF client) from `conftest.py`:
 
 ## Test results
 
-Run the whole suite with `pytest`. Against a live **IOS-XRv9000** in Cisco
-Modeling Labs, the NETCONF, OpenConfig and configuration tests pass; the RESTCONF
-tests **skip automatically** if the image does not expose a RESTCONF agent, so
-the suite stays green rather than failing on unsupported platforms.
+Against a live **IOS-XRv9000** in Cisco Modeling Labs: **16 passed, 2 skipped**.
+The NETCONF, OpenConfig, configuration-lifecycle and **gNMI** tests pass; the
+RESTCONF tests **skip automatically** because IOS-XR exposes NETCONF + gNMI
+rather than a RESTCONF agent - so the suite stays green instead of failing on an
+unsupported protocol.
 
 Each run emits a self-contained **`qa_report.html`** (configured in `pytest.ini`)
 with per-test results and the captured live logs (hostname, uptime, interface
