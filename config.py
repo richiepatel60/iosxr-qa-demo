@@ -14,6 +14,7 @@ import os
 HOST = os.getenv("XR_HOST", "192.168.255.40")
 NETCONF_PORT = int(os.getenv("XR_PORT", "830"))
 RESTCONF_PORT = int(os.getenv("XR_RESTCONF_PORT", "443"))
+GNMI_PORT = int(os.getenv("XR_GNMI_PORT", "57400"))
 USERNAME = os.getenv("XR_USERNAME", "cisco")
 PASSWORD = os.getenv("XR_PASSWORD", "cisco")
 TIMEOUT = int(os.getenv("XR_TIMEOUT", "30"))

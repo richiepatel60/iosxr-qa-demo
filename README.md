@@ -69,6 +69,7 @@ an optional RESTCONF client) from `conftest.py`:
 | `tests/test_configuration.py` | config | Running-config validation; required-config compliance (parametrized); `<edit-config>` loopback create/verify/delete round-trip; direct write to `<running>` rejected (negative); `discard-changes` rollback |
 | `tests/test_openconfig.py` | openconfig | OpenConfig models are advertised and `openconfig-interfaces` returns data |
 | `tests/test_restconf.py` | restconf | YANG library and interfaces over RESTCONF/HTTPS (auto-skipped if the RESTCONF agent is not enabled) |
+| `tests/test_gnmi.py` | gnmi | gNMI Capabilities + Get over gRPC - IOS-XR's native model-driven / telemetry interface (auto-skipped if gRPC is off) |
 
 ---
 
@@ -190,6 +191,6 @@ Open `qa_report.html` in a browser to review the results.
 - Establishing NETCONF sessions and reading YANG operational state with ncclient.
 - Mapping IOS-XR YANG models (`Cisco-IOS-XR-shellutil-oper`,
   `Cisco-IOS-XR-pfi-im-cmd-oper`) to concrete health assertions.
-- **Next:** add gNMI / streaming-telemetry validation and lightweight AI/ML
+- **Next:** add dial-out streaming telemetry validation and lightweight AI/ML
   anomaly detection on operational metrics, and extend the assertions toward
   optical-layer YANG models (L0/L1) to align with the NCS optical platforms.

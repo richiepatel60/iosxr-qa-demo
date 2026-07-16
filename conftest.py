@@ -9,6 +9,7 @@ through pytest's dependency injection. Session-scoped fixtures mean the
 from __future__ import annotations
 
 import logging
+import socket
 
 import pytest
 from ncclient import manager
@@ -94,3 +95,30 @@ def restconf():
 
     yield session, base_url
     session.close()
+
+
+@pytest.fixture(scope="session")
+def gnmi_target():
+    """Return connection kwargs for a pygnmi ``gNMIclient``.
+
+    gNMI runs over gRPC (default TCP/57400 on IOS-XR) and is the platform's
+    native model-driven / streaming-telemetry interface. If gRPC is not
+    reachable the gNMI tests are *skipped* rather than failed, matching the
+    RESTCONF fixture's capability-aware behaviour.
+    """
+    host, port = config.HOST, config.GNMI_PORT
+    try:
+        with socket.create_connection((host, port), timeout=config.TIMEOUT):
+            pass
+    except OSError as exc:
+        pytest.skip(
+            f"gNMI/gRPC not reachable on {host}:{port} ({exc}) - "
+            f"enable 'grpc' on the router to run these tests."
+        )
+
+    return {
+        "target": (host, port),
+        "username": config.USERNAME,
+        "password": config.PASSWORD,
+        "insecure": True,  # lab box: gRPC configured with 'no-tls'
+    }
