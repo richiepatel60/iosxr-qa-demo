@@ -9,6 +9,7 @@ through pytest's dependency injection. Session-scoped fixtures mean the
 from __future__ import annotations
 
 import logging
+import os
 import socket
 
 import pytest
@@ -115,6 +116,11 @@ def gnmi_target():
             f"gNMI/gRPC not reachable on {host}:{port} ({exc}) - "
             f"enable 'grpc' on the router to run these tests."
         )
+
+    # gRPC honours http(s)_proxy env vars. The router is a local NAT address the
+    # corporate proxy cannot reach, so exclude it to force a DIRECT connection.
+    os.environ["no_grpc_proxy"] = host
+    os.environ["no_proxy"] = f"{host},{os.environ.get('no_proxy', '')}"
 
     return {
         "target": (host, port),
