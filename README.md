@@ -87,6 +87,14 @@ state).
 
 ---
 
+## Demo
+
+<!-- Drop your images into the screenshots/ folder and reference them below. -->
+
+![pytest run](screenshots/screenshot.png)
+
+<!-- ![HTML report](screenshots/qa-report.png) -->
+
 ---
 
 ## GenAI utilization
@@ -115,6 +123,7 @@ iosxr-qa-demo/
 ├── pytest.ini             # markers, HTML report, live logs, test paths
 ├── requirements.txt       # pinned dependencies (reproducible env)
 ├── qa_report.html         # generated on each run (git-ignored)
+├── screenshots/           # demo images referenced in this README
 ├── .gitignore
 └── README.md
 ```
